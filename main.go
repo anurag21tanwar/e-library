@@ -84,6 +84,58 @@ func (h *Handler) GetBook(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(book)
 }
 
+// BorrowBook handles POST /Borrow
+func (h *Handler) BorrowBook(w http.ResponseWriter, r *http.Request) {
+	// 1. Define the input structure
+	var req struct {
+		Name  string `json:"name"`
+		Title string `json:"title"`
+	}
+
+	// 2. Decode JSON body
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	// 3. Validation
+	if req.Name == "" || req.Title == "" {
+		http.Error(w, "Name and Title are required", http.StatusBadRequest)
+		return
+	}
+
+	// 4. Critical Section: Update state
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock() // Ensure unlock happens even if we return early
+
+	book, exists := h.store.Books[req.Title]
+	if !exists {
+		http.Error(w, "Book does not exist", http.StatusNotFound)
+		return
+	}
+
+	if book.AvailableCopies <= 0 {
+		http.Error(w, "No copies available for loan", http.StatusConflict)
+		return
+	}
+
+	// 5. Perform the Transaction
+	book.AvailableCopies--
+
+	loan := LoanDetail{
+		NameOfBorrower: req.Name,
+		BookTitle:      req.Title,
+		LoanDate:       time.Now(),
+		ReturnDate:     time.Now().AddDate(0, 0, 28), // 4 weeks as per requirement
+	}
+	h.store.Loans = append(h.store.Loans, loan)
+
+	// 6. Respond with the loan details
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(loan)
+}
+
 func main() {
 	// Initialize store and handlers
 	store := NewLibraryStore()
@@ -99,6 +151,9 @@ func main() {
 
 	// Register the GET /Book route
 	mux.HandleFunc("GET /Book", h.GetBook)
+
+	// Register the POST /Borrow route
+	mux.HandleFunc("POST /Borrow", h.BorrowBook)
 
 	port := ":3000"
 	fmt.Printf("Server starting on port %s...\n", port)
