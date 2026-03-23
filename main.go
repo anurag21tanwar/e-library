@@ -136,6 +136,65 @@ func (h *Handler) BorrowBook(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(loan)
 }
 
+// ExtendLoan handles POST /Extend
+func (h *Handler) ExtendLoan(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name  string `json:"name"`
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid input", http.StatusBadRequest)
+		return
+	}
+
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+
+	// Search for the active loan
+	for i, loan := range h.store.Loans {
+		if loan.NameOfBorrower == req.Name && loan.BookTitle == req.Title {
+			// Extend by 3 weeks (21 days) from the current return date
+			h.store.Loans[i].ReturnDate = loan.ReturnDate.AddDate(0, 0, 21)
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(h.store.Loans[i])
+			return
+		}
+	}
+
+	http.Error(w, "No active loan found for this user and book", http.StatusNotFound)
+}
+
+// ReturnBook handles POST /Return
+func (h *Handler) ReturnBook(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name  string `json:"name"`
+		Title string `json:"title"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+
+	for i, loan := range h.store.Loans {
+		if loan.NameOfBorrower == req.Name && loan.BookTitle == req.Title {
+			// 1. Remove loan from slice
+			h.store.Loans = append(h.store.Loans[:i], h.store.Loans[i+1:]...)
+
+			// 2. Increment the available copies back in the book map
+			if book, ok := h.store.Books[req.Title]; ok {
+				book.AvailableCopies++
+			}
+
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, "Book returned successfully")
+			return
+		}
+	}
+
+	http.Error(w, "Active loan record not found", http.StatusNotFound)
+}
+
 func main() {
 	// Initialize store and handlers
 	store := NewLibraryStore()
@@ -154,6 +213,12 @@ func main() {
 
 	// Register the POST /Borrow route
 	mux.HandleFunc("POST /Borrow", h.BorrowBook)
+
+	// Register the POST /Extend route
+	mux.HandleFunc("POST /Extend", h.ExtendLoan)
+
+	// Register the POST /Return route
+	mux.HandleFunc("POST /Return", h.ReturnBook)
 
 	port := ":3000"
 	fmt.Printf("Server starting on port %s...\n", port)
