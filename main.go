@@ -1,3 +1,5 @@
+// Package main provides a RESTful API for an e-Library system,
+// allowing users to search, borrow, extend, and return books.
 package main
 
 import (
@@ -81,7 +83,9 @@ func (h *Handler) GetBook(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Return JSON response
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(book)
+	if err := json.NewEncoder(w).Encode(book); err != nil {
+		log.Printf("failed to encode response: %v", err)
+	}
 }
 
 // BorrowBook handles POST /Borrow
@@ -133,7 +137,9 @@ func (h *Handler) BorrowBook(w http.ResponseWriter, r *http.Request) {
 	// 6. Respond with the loan details
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(loan)
+	if err := json.NewEncoder(w).Encode(loan); err != nil {
+		log.Printf("failed to encode response: %v", err)
+	}
 }
 
 // ExtendLoan handles POST /Extend
@@ -157,7 +163,9 @@ func (h *Handler) ExtendLoan(w http.ResponseWriter, r *http.Request) {
 			h.store.Loans[i].ReturnDate = loan.ReturnDate.AddDate(0, 0, 21)
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(h.store.Loans[i])
+			if err := json.NewEncoder(w).Encode(h.store.Loans[i]); err != nil {
+				log.Printf("failed to encode response: %v", err)
+			}
 			return
 		}
 	}
@@ -171,7 +179,10 @@ func (h *Handler) ReturnBook(w http.ResponseWriter, r *http.Request) {
 		Name  string `json:"name"`
 		Title string `json:"title"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
@@ -187,7 +198,7 @@ func (h *Handler) ReturnBook(w http.ResponseWriter, r *http.Request) {
 			}
 
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, "Book returned successfully")
+			_, _ = fmt.Fprint(w, "Book returned successfully")
 			return
 		}
 	}
@@ -204,8 +215,8 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Root health check to verify the server is up
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "e-Library API is running")
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "e-Library API is running")
 	})
 
 	// Register the GET /Book route

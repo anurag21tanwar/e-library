@@ -76,10 +76,10 @@ Return a borrowed book to the library inventory.
 Since the storage is in-memory, I used a `sync.RWMutex`.
 
 - **RLock (Read Lock):** Used for the `/Book` endpoint to allow multiple simultaneous readers, maximizing performance.
-- **Lock (Write Lock):** Used for Borrow, Extend, and Return operations to ensure atomicity and prevent race conditions (e.g., two users borrowing the last copy of a book at once).
+- **Lock (Write Lock):** Used for `Borrow`, `Extend`, and `Return` operations to ensure atomicity and prevent race conditions (e.g., two users borrowing the last copy of a book at once).
 
 ## Slice Manipulation
-To maintain a high-performance in-memory store, loan records are removed from the internal slice using the idiomatic Go approach: append(s[:i], s[i+1:]...). This avoids unnecessary allocations.
+To maintain a high-performance in-memory store, loan records are removed from the internal slice using the idiomatic Go approach: `append(s[:i], s[i+1:]...)`. This avoids unnecessary allocations.
 
 ## Error Handling & HTTP Status
 The API adheres to REST standards:
@@ -98,7 +98,7 @@ Upon initialization, the library is seeded with:
 
 ## Future Improvements
 
-#### 1. Implement persistent storage, such as a `Postgres` database
+#### 1. Implement persistent storage, such as a Postgres database
 - To implement the Persistent Storage bonus task, I have structured the LibraryStore as a dependency. This allows for a seamless migration to PostgreSQL by implementing a Repository Interface, moving from in-memory mutexes to ACID-compliant database transactions.
 - I would define a Repository interface with methods like `GetBook(title string)`, `UpdateStock(title string, change int)`, and `CreateLoan(loan LoanDetail)`.
 - Currently, the `Handler` depends on the `LibraryStore` struct. I would change the `Handler` to depend on that `Repository` interface instead. This allows me to swap the `In-Memory` implementation for a `Postgres` implementation using `database/sql` or an `ORM` like `Gorm` without changing a single line of code in the HTTP handlers."
