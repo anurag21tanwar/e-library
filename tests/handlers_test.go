@@ -27,11 +27,6 @@ import (
 	"e-library/service"
 )
 
-// =============================================================================
-// Fakes — DIP: handler tests never depend on the real service or repository.
-// Each fake implements only the interface its tests need (ISP).
-// =============================================================================
-
 // mockBookService implements service.BookService.
 type mockBookService struct {
 	getBookFn func(string) (models.BookDetail, error)
@@ -77,7 +72,6 @@ func (m *mockLoanService) ReturnBook(name, title string) error {
 // =============================================================================
 
 // mustAddBook seeds a book into the store, panicking if the title is a duplicate.
-// A panic here means the test fixture is broken, not that production code is wrong.
 func mustAddBook(store *repository.LibraryStore, book models.BookDetail) {
 	if err := store.AddBook(book); err != nil {
 		panic(fmt.Sprintf("test setup: failed to add book %q: %v", book.Title, err))
@@ -169,11 +163,6 @@ func decodeBody[T any](t *testing.T, rr *httptest.ResponseRecorder) T {
 	return v
 }
 
-// =============================================================================
-// Shared table data — reused across POST handler validation tests (OCP).
-// Adding a new validation case means adding one row here, nowhere else.
-// =============================================================================
-
 // nameAndTitleValidationCases covers the two validation rules common to all
 // POST endpoints that accept {"name", "title"} bodies.
 var nameAndTitleValidationCases = []struct {
@@ -192,12 +181,12 @@ var nameAndTitleValidationCases = []struct {
 		name:       "empty name",
 		body:       `{"name":"","title":"Clean Code"}`,
 		wantStatus: http.StatusBadRequest,
-		wantError:  "Name and Title are required",
+		wantError:  "name and title are required",
 	},
 	{
 		name:       "empty title",
 		body:       `{"name":"Anurag","title":""}`,
 		wantStatus: http.StatusBadRequest,
-		wantError:  "Name and Title are required",
+		wantError:  "name and title are required",
 	},
 }

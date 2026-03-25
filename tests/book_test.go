@@ -20,11 +20,11 @@ func TestGetBook_MissingTitle(t *testing.T) {
 
 	assertStatus(t, rr, http.StatusBadRequest)
 	assertContentType(t, rr)
-	assertErrorBody(t, rr, "Title query parameter is required")
+	assertErrorBody(t, rr, "title query parameter is required")
 }
 
 // TestGetBook_ServiceErrors verifies the handler maps each service error to the
-// correct HTTP status and message (OCP: add a row to cover a new error).
+// correct HTTP status and message.
 func TestGetBook_ServiceErrors(t *testing.T) {
 	cases := []struct {
 		name       string

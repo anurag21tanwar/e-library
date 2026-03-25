@@ -18,17 +18,21 @@ const (
 )
 
 // BookService covers read-only book queries.
-// Callers that only read books depend solely on this narrow interface (ISP).
 type BookService interface {
 	GetBook(title string) (models.BookDetail, error)
 }
 
 // LoanService covers all loan lifecycle operations.
-// Callers that only manage loans depend solely on this narrow interface (ISP).
 type LoanService interface {
 	BorrowBook(name, title string) (models.LoanDetail, error)
 	ExtendLoan(name, title string) (models.LoanDetail, error)
 	ReturnBook(name, title string) error
+}
+
+// Library combines BookService and LoanService for callers that need both.
+type Library interface {
+	BookService
+	LoanService
 }
 
 type libraryService struct {
@@ -36,9 +40,9 @@ type libraryService struct {
 	logger *slog.Logger
 }
 
-// New returns a *libraryService that satisfies both BookService and LoanService.
+// New returns a Library that satisfies both BookService and LoanService.
 // Callers assign the result to whichever interface(s) they need.
-func New(store repository.Store, logger *slog.Logger) *libraryService {
+func New(store repository.Store, logger *slog.Logger) Library {
 	return &libraryService{store: store, logger: logger}
 }
 
@@ -96,8 +100,7 @@ func (s *libraryService) ExtendLoan(name, title string) (models.LoanDetail, erro
 
 // ReturnBook deletes the active loan and restores the book's stock.
 // Returns ErrLoanNotFound if no active loan exists.
-// Returns ErrStockRestoreFailed if the loan was deleted but stock could not be restored
-// (invariant violation — logged here for observability).
+// Returns ErrStockRestoreFailed if the loan was deleted, but stock could not be restored
 func (s *libraryService) ReturnBook(name, title string) error {
 	if err := s.store.DeleteLoan(name, title); err != nil {
 		if errors.Is(err, repository.ErrLoanNotFound) {

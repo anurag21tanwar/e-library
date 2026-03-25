@@ -10,8 +10,7 @@ import (
 )
 
 // Registrar is implemented by any handler group that can register its own routes.
-// NewRouter accepts a variadic list of Registrars, so adding a new handler group
-// never requires modifying this file (OCP).
+// NewRouter accepts a variadic list of Registrars.
 type Registrar interface {
 	Register(mux *http.ServeMux)
 }

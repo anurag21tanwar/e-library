@@ -61,7 +61,7 @@ func TestExtendLoan_Integration_DeniedOnSecondExtension(t *testing.T) {
 	rr := postJSON(h.ExtendLoan, `{"name":"Anurag","title":"Clean Code"}`)
 	assertStatus(t, rr, http.StatusOK)
 
-	// Second extension — must be denied.
+	// The second extension — must be denied.
 	rr = postJSON(h.ExtendLoan, `{"name":"Anurag","title":"Clean Code"}`)
 	assertStatus(t, rr, http.StatusConflict)
 	assertContentType(t, rr)

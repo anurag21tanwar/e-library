@@ -20,8 +20,7 @@ func Error(w http.ResponseWriter, message string, code int) {
 }
 
 // JSON marshals v into a buffer before writing to w.
-// If
-// marshaling fails, it logs the error and writes a 500 response instead.
+// If marshaling fails, it logs the error and writes a 500 response instead.
 func JSON(w http.ResponseWriter, logger *slog.Logger, code int, v any) {
 	buf, err := json.Marshal(v)
 	if err != nil {

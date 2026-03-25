@@ -25,7 +25,7 @@ A lightweight, thread-safe RESTful API built in Go for managing e-book loans.
    ```
 3. The server starts on port **3000** by default. Override with the `PORT` environment variable:
    ```bash
-   PORT=8080 go run main.go
+   PORT=8080 go run main.goclaude
    ```
 4. **Health check**:
    ```bash
@@ -145,7 +145,7 @@ All errors share a consistent JSON shape:
 
 ### Package Architecture
 
-The codebase follows a layered architecture with clear separation of concerns:
+The codebase follows a layered architecture with a clear separation of concerns:
 
 ```
 HTTP Request → middleware → handler → service → repository
@@ -196,8 +196,5 @@ Title uniqueness is enforced by `AddBook` (returns `ErrDuplicateBook` on collisi
 
 ## Future Improvements
 
-#### 1. Persistent storage (e.g. PostgreSQL)
+#### Persistent storage (e.g. PostgreSQL)
 The service depends on the `repository.Store` interface. Swapping the in-memory `LibraryStore` for a `database/sql`-backed implementation requires no changes to the handler or service layers.
-
-#### 2. Authentication / Authorization
-Add middleware to verify a caller's identity before allowing borrow/extend/return operations.

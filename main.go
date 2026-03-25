@@ -1,3 +1,4 @@
+// Package main is the entry point for the e-Library API server.
 package main
 
 import (

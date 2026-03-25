@@ -36,7 +36,6 @@ func TestReturnBook_NotFound(t *testing.T) {
 
 // TestReturnBook_StockRestoreFailed verifies the handler returns 200 even when
 // ErrStockRestoreFailed is returned — the loan was deleted, so the user's action succeeded.
-// This path is only reachable via mock (invariant violation in production).
 func TestReturnBook_StockRestoreFailed(t *testing.T) {
 	loans := &mockLoanService{
 		returnFn: func(_, _ string) error { return service.ErrStockRestoreFailed },

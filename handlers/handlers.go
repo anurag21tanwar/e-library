@@ -22,13 +22,11 @@ type Handler struct {
 }
 
 // NewHandler creates a Handler wired to the given services and logger.
-// Since *service.libraryService satisfies both BookService and LoanService,
-// callers typically pass the same value for both parameters.
 func NewHandler(books service.BookService, loans service.LoanService, logger *slog.Logger) *Handler {
 	return &Handler{books: books, loans: loans, logger: logger}
 }
 
-// Register registers all handler routes on mux, satisfying routes.Registrar (OCP).
+// Register registers all handler routes on mux.
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /Book", h.GetBook)
 	mux.HandleFunc("POST /Borrow", h.BorrowBook)
@@ -36,7 +34,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /Return", h.ReturnBook)
 }
 
-// decodeRequest applies a body size limit and decodes JSON into v.
 // Returns false and writes a 400 response on any failure.
 func decodeRequest(w http.ResponseWriter, r *http.Request, v any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
@@ -140,8 +137,6 @@ func (h *Handler) ReturnBook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, service.ErrStockRestoreFailed) {
-			// The loan was successfully deleted; stock restoration is a data-integrity
-			// issue logged by the service. Return 200 — the user's action succeeded.
 			h.logger.Error("stock restore failed after return",
 				"name", req.Name, "title", req.Title)
 		} else {

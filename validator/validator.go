@@ -1,6 +1,4 @@
 // Package validator defines typed request structs for each endpoint.
-// Each struct owns its own Validate() method, keeping validation rules
-// co-located with the data they describe (SRP) and out of handler logic.
 package validator
 
 import "errors"
@@ -8,7 +6,7 @@ import "errors"
 // validateNameAndTitle is the shared rule for all loan-related requests.
 func validateNameAndTitle(name, title string) error {
 	if name == "" || title == "" {
-		return errors.New("Name and Title are required")
+		return errors.New("name and title are required")
 	}
 	return nil
 }
@@ -18,9 +16,10 @@ type GetBookQuery struct {
 	Title string
 }
 
+// Validate returns an error if the Title field is empty.
 func (q GetBookQuery) Validate() error {
 	if q.Title == "" {
-		return errors.New("Title query parameter is required")
+		return errors.New("title query parameter is required")
 	}
 	return nil
 }
@@ -31,6 +30,7 @@ type BorrowRequest struct {
 	Title string `json:"title"`
 }
 
+// Validate returns an error if Name or Title is empty.
 func (r BorrowRequest) Validate() error {
 	return validateNameAndTitle(r.Name, r.Title)
 }
@@ -41,6 +41,7 @@ type ExtendRequest struct {
 	Title string `json:"title"`
 }
 
+// Validate returns an error if Name or Title is empty.
 func (r ExtendRequest) Validate() error {
 	return validateNameAndTitle(r.Name, r.Title)
 }
@@ -51,6 +52,7 @@ type ReturnRequest struct {
 	Title string `json:"title"`
 }
 
+// Validate returns an error if Name or Title is empty.
 func (r ReturnRequest) Validate() error {
 	return validateNameAndTitle(r.Name, r.Title)
 }

@@ -8,7 +8,7 @@ import (
 	"e-library/models"
 )
 
-// Sentinel errors returned by store methods. The service layer maps these to domain errors.
+// Errors returned by store methods.
 var (
 	ErrBookNotFound        = errors.New("book not found")
 	ErrDuplicateBook       = errors.New("a book with that title already exists")
@@ -19,7 +19,6 @@ var (
 )
 
 // Store is the interface that repository implementations must satisfy.
-// Method names describe the operation, not the implementation mechanism (LSP).
 type Store interface {
 	GetBook(title string) (models.BookDetail, error)
 	CreateLoan(loan models.LoanDetail) error
@@ -32,16 +31,15 @@ type Store interface {
 type LibraryStore struct {
 	mu    sync.RWMutex
 	books map[string]*models.BookDetail
-	loans map[string]models.LoanDetail // keyed by loanKey(name, title)
+	loans map[string]models.LoanDetail
 }
 
 // loanKey produces a composite map key for a (borrower, book) pair.
-// A null-byte separator prevents collisions between names/titles that share a prefix.
 func loanKey(name, title string) string {
 	return name + "\x00" + title
 }
 
-// NewLibraryStore initialises an empty store. Seed data is the caller's responsibility.
+// NewLibraryStore initialises an empty store.
 func NewLibraryStore() *LibraryStore {
 	return &LibraryStore{
 		books: make(map[string]*models.BookDetail),
@@ -50,9 +48,7 @@ func NewLibraryStore() *LibraryStore {
 }
 
 // AddBook inserts a book into the store. Returns ErrDuplicateBook if a book
-// with the same title already exists. Title uniqueness is enforced here because
-// the title is the primary key used throughout the system.
-// This is intentionally not part of Store — only used at startup to seed data.
+// with the same title already exists.
 func (s *LibraryStore) AddBook(book models.BookDetail) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -70,7 +66,7 @@ func (s *LibraryStore) GetBook(title string) (models.BookDetail, error) {
 	b, ok := s.books[title]
 	var snap models.BookDetail
 	if ok {
-		snap = *b // copy under lock to prevent data race after unlock
+		snap = *b
 	}
 	s.mu.RUnlock()
 
@@ -80,9 +76,8 @@ func (s *LibraryStore) GetBook(title string) (models.BookDetail, error) {
 	return snap, nil
 }
 
-// CreateLoan atomically verifies the book exists, has available stock, and the borrower
-// has no duplicate active loan, then decrements stock and stores the loan.
-// The caller is responsible for populating all LoanDetail fields including dates.
+// CreateLoan verifies the book exists, has available stock, and the borrower
+// has no duplicate active loan, then decrements stock, and stores the loan.
 func (s *LibraryStore) CreateLoan(loan models.LoanDetail) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,9 +99,9 @@ func (s *LibraryStore) CreateLoan(loan models.LoanDetail) error {
 	return nil
 }
 
-// UpdateLoanExpiry atomically adds the given number of days to an active loan's return
+// UpdateLoanExpiry adds the given number of days to an active loan's return
 // date and returns the updated record. Returns ErrLoanAlreadyExtended if the loan has
-// already been extended once. The service layer provides the number of days.
+// already been extended once.
 func (s *LibraryStore) UpdateLoanExpiry(name, title string, days int) (models.LoanDetail, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
