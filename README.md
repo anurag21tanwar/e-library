@@ -3,13 +3,17 @@
 A lightweight, thread-safe RESTful API built in Go for managing e-book loans.
 
 ## Features
+
 - **In-Memory Storage**: Thread-safe repository using `sync.RWMutex` and Go maps.
-- **Concurrent-Safe**: Handles multiple simultaneous borrow/return requests with no data races.
-- **Modern Routing**: Utilizes Go 1.22+ enhanced `http.ServeMux`.
-- **Structured Error Responses**: All errors return a consistent JSON envelope `{"error": "..."}`.
-- **Unit Tested**: 17 tests covering all endpoints, success and error paths, with `-race` detector.
+- **Concurrent-Safe**: Handles simultaneous borrow/return requests with no data races.
+- **Modern Routing**: Go 1.22+ `http.ServeMux` with method-prefixed patterns.
+- **Structured Logging**: Every request logs method, path, status, and latency via `log/slog` (JSON output).
+- **Request Validation**: Input validated before reaching business logic; consistent `{"error": "..."}` responses.
+- **Graceful Shutdown**: Listens for `SIGINT`/`SIGTERM` and drains in-flight requests before exiting.
+- **25 Tests**: Unit tests (mock-backed) and integration tests (real in-memory store), including `-race` detector support.
 
 ## Prerequisites
+
 - Go 1.22 or higher
 
 ## Getting Started
@@ -19,26 +23,49 @@ A lightweight, thread-safe RESTful API built in Go for managing e-book loans.
    ```bash
    go run main.go
    ```
-3. The application will start and listen on port **3000**.
-4. Run tests to verify logic and coverage:
+3. The server starts on port **3000** by default. Override with the `PORT` environment variable:
    ```bash
-   go test -race -v
-   go test -coverprofile=coverage.out
+   PORT=8080 go run main.go
    ```
-5. To view the HTML coverage report:
+4. **Health check**:
    ```bash
+   curl http://localhost:3000/
+   # e-Library API is running
+   ```
+5. **Run tests**:
+   ```bash
+   go test -race -v ./tests/...
+   ```
+6. **View coverage report**:
+   ```bash
+   go test ./tests/... -coverprofile=coverage.out -coverpkg=./...
    go tool cover -html=coverage.out
    ```
 
-# API Endpoints
+## Project Structure
+
+```
+.
+├── main.go               # Server setup, seeding, graceful shutdown
+├── handlers/             # HTTP layer — decodes requests, maps errors to status codes
+├── service/              # Business logic — loan periods, validation rules, error mapping
+├── repository/           # In-memory store — thread-safe reads/writes
+├── middleware/           # Logging middleware — method, path, status, latency
+├── routes/               # Router wiring — registers handlers, applies middleware
+├── validator/            # Request structs with Validate() methods
+├── models/               # Shared domain types (BookDetail, LoanDetail)
+├── respond/              # JSON response helpers (respond.JSON, respond.Error)
+└── tests/                # All tests — unit (mocks) and integration (real store)
+```
+
+## API Endpoints
 
 All responses (success and error) use `Content-Type: application/json`.
 
-### 1. Search for a Book
+### GET /Book — Search for a book
 
 Retrieve details and available copies of a specific book title.
 
-- **Endpoint:** `GET /Book`
 - **Query Param:** `title` (string, required)
 - **Example:**
   ```bash
@@ -49,11 +76,10 @@ Retrieve details and available copies of a specific book title.
   {"title": "Clean Code", "available_copies": 1}
   ```
 
-### 2. Borrow a Book
+### POST /Borrow — Borrow a book
 
-Borrow a book for a standard loan period of 4 weeks. A user cannot borrow the same book twice concurrently.
+Borrow a book for a standard loan period of **28 days**. A user cannot borrow the same book twice concurrently.
 
-- **Endpoint:** `POST /Borrow`
 - **Body:** `{"name": "string", "title": "string"}`
 - **Example:**
   ```bash
@@ -63,14 +89,18 @@ Borrow a book for a standard loan period of 4 weeks. A user cannot borrow the sa
   ```
 - **Success `201`:**
   ```json
-  {"name_of_borrower": "Anurag", "book_title": "Clean Code", "loan_date": "...", "return_date": "..."}
+  {
+    "name_of_borrower": "Anurag",
+    "book_title": "Clean Code",
+    "loan_date": "2026-03-25T10:00:00Z",
+    "return_date": "2026-04-22T10:00:00Z"
+  }
   ```
 
-### 3. Extend a Loan
+### POST /Extend — Extend a loan
 
-Extend an existing loan by an additional 3 weeks from the current return date.
+Extend an existing loan's return date by **21 days**. Each loan may only be extended **once**; a second attempt is rejected.
 
-- **Endpoint:** `POST /Extend`
 - **Body:** `{"name": "string", "title": "string"}`
 - **Example:**
   ```bash
@@ -78,13 +108,12 @@ Extend an existing loan by an additional 3 weeks from the current return date.
     -H "Content-Type: application/json" \
     -d '{"name": "Anurag", "title": "Clean Code"}'
   ```
-- **Success `200`:** Returns the updated loan record.
+- **Success `200`:** Returns the updated loan record (same shape as Borrow response, with `"extended": true`).
 
-### 4. Return a Book
+### POST /Return — Return a book
 
-Return a borrowed book to the library inventory.
+Return a borrowed book; restores one copy to inventory.
 
-- **Endpoint:** `POST /Return`
 - **Body:** `{"name": "string", "title": "string"}`
 - **Example:**
   ```bash
@@ -99,7 +128,7 @@ Return a borrowed book to the library inventory.
 
 ### Error Responses
 
-All error responses share a consistent JSON shape:
+All errors share a consistent JSON shape:
 
 ```json
 {"error": "<description>"}
@@ -107,42 +136,68 @@ All error responses share a consistent JSON shape:
 
 | Status | Meaning |
 |---|---|
-| `400 Bad Request` | Invalid JSON or missing required fields |
-| `404 Not Found` | Book or loan record does not exist |
-| `409 Conflict` | Book out of stock, or user already has an active loan for that book |
-| `201 Created` | Loan successfully created |
+| `400 Bad Request` | Invalid or malformed JSON, or missing required fields (`name`/`title`) |
+| `404 Not Found` | Book or active loan record does not exist |
+| `409 Conflict` | No copies available, user already has an active loan for that title, or loan has already been extended |
+| `500 Internal Server Error` | Unexpected server-side failure |
 
-# Design Considerations
+## Design
 
-## Concurrency Model
+### Package Architecture
 
-All shared states are protected by a `sync.RWMutex`:
+The codebase follows a layered architecture with clear separation of concerns:
 
-- **RLock (Read Lock):** Used for `GET /Book` to allow multiple simultaneous readers.
-- **Lock (Write Lock):** Used for `Borrow`, `Extend`, and `Return` to ensure atomicity (e.g., two users borrowing the last copy simultaneously).
+```
+HTTP Request → middleware → handler → service → repository
+                 (log)    (decode/  (business  (store
+                           validate)  logic)    read/write)
+```
 
-The `GetBook` handler copies the `BookDetail` value before releasing the lock, preventing a data race where the pointer could be read after another goroutine modifies it.
+Each layer depends only on interfaces, not concrete types (Dependency Inversion):
+- `Handler` depends on `service.BookService` and `service.LoanService` interfaces
+- `service.libraryService` depends on the `repository.Store` interface
+- Tests inject mock implementations without touching production wiring
 
-## Loan Storage
+### Concurrency Model
 
-Loans are stored in a `map[string]LoanDetail` keyed by a `(name, title)` composite key. This gives O(1) lookup, update, and deletion for `Extend` and `Return` — compared to the O(n) linear scan a slice would require. A null-byte separator (`\x00`) is used between name and title to prevent key collisions.
+All shared states are protected by a `sync.RWMutex` in `LibraryStore`:
 
-## Structured Error Handling
+- **`RLock`** — `GET /Book`: allows multiple concurrent readers.
+- **`Lock`** — `Borrow`, `Extend`, `Return`: exclusive write lock ensures atomicity (e.g. two users borrowing the last copy simultaneously both get the correct outcome).
 
-All error responses are returned as JSON via a shared `writeError` helper, and all success responses are written via `writeJSON`. The `writeJSON` helper encodes the response body into a buffer before writing any headers — this ensures a failed encode returns `500` instead of silently sending a `200` with a broken body.
+`GetBook` copies the `BookDetail` value under the lock before releasing, preventing a data race where a pointer could be read after another goroutine modifies the underlying struct.
 
-## Seeding
+`CreateLoan` performs a check-then-act (stock check → duplicate check → decrement → store) as a single atomic write, preventing TOCTOU races.
 
-Upon initialization, the library is seeded with:
+### Loan Storage
 
-- "The Go Programming Language" (three copies)
-- "Clean Code" (one copy)
+Loans are stored in `map[string]LoanDetail` keyed by a `(name, title)` composite key. This gives O(1) lookup, update, and deletion — compared to O(n) for a slice-based approach. A null-byte separator (`\x00`) between name and title prevents key collisions for inputs that share a prefix.
+
+### Request Validation
+
+Each request type (in the `validator` package) owns a `Validate()` method. Validation runs in the handler before any service call, returning `400` immediately on failure. This keeps business logic free of input-sanitisation concerns (SRP).
+
+### Response Safety
+
+`respond.JSON` encodes the response body into a buffer *before* writing headers. This ensures a failed encode returns `500` instead of sending a partial `200` with a broken body.
+
+### Logging
+
+`middleware.Logging` wraps the entire router and logs every request using structured `log/slog` fields: `method`, `path`, `status`, `latency_ms`. Output is JSON-formatted, compatible with log aggregators (Datadog, CloudWatch, etc.).
+
+### Seeding
+
+On startup, the library is seeded with:
+
+- "The Go Programming Language" — three copies
+- "Clean Code" — one copy
+
+Title uniqueness is enforced by `AddBook` (returns `ErrDuplicateBook` on collision).
 
 ## Future Improvements
 
-#### 1. Implement persistent storage (e.g. PostgreSQL)
-The `Handler` currently depends on the concrete `*LibraryStore`. Extracting a `Store` interface with methods like `GetBook`, `CreateLoan`, and `DeleteLoan` would allow swapping the in-memory implementation for a `database/sql` or `gorm`-backed one without touching handler code.
+#### 1. Persistent storage (e.g. PostgreSQL)
+The service depends on the `repository.Store` interface. Swapping the in-memory `LibraryStore` for a `database/sql`-backed implementation requires no changes to the handler or service layers.
 
-#### 2. Request logging middleware
-Adding a middleware layer (e.g. `rs/zerolog` or `zap`) to log method, path, status code, and latency on every request would improve observability.
-
+#### 2. Authentication / Authorization
+Add middleware to verify a caller's identity before allowing borrow/extend/return operations.
