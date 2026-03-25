@@ -184,6 +184,11 @@ func (h *Handler) ExtendLoan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Name == "" || req.Title == "" {
+		writeError(w, "Name and Title are required", http.StatusBadRequest)
+		return
+	}
+
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
 
@@ -210,6 +215,11 @@ func (h *Handler) ReturnBook(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" || req.Title == "" {
+		writeError(w, "Name and Title are required", http.StatusBadRequest)
 		return
 	}
 
