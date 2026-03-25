@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"e-library/handlers"
+	"e-library/models"
 	"e-library/repository"
+	"e-library/routes"
+	"e-library/service"
 )
 
 func main() {
@@ -19,9 +22,15 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	store := repository.NewLibraryStore(logger)
-	h := handlers.NewHandler(store, logger)
-	mux := handlers.NewRouter(h)
+	// Initialise store and seed starting inventory.
+	store := repository.NewLibraryStore()
+	store.AddBook(models.BookDetail{Title: "The Go Programming Language", AvailableCopies: 3})
+	store.AddBook(models.BookDetail{Title: "Clean Code", AvailableCopies: 1})
+
+	// *service.libraryService satisfies both BookService and LoanService.
+	svc := service.New(store, logger)
+	h := handlers.NewHandler(svc, svc, logger)
+	mux := routes.NewRouter(logger, h)
 
 	port := os.Getenv("PORT")
 	if port == "" {

@@ -3,14 +3,12 @@ package repository
 
 import (
 	"errors"
-	"log/slog"
 	"sync"
-	"time"
 
 	"e-library/models"
 )
 
-// Sentinel errors returned by store methods. Handlers map these to HTTP status codes.
+// Sentinel errors returned by store methods. The service layer maps these to domain errors.
 var (
 	ErrBookNotFound  = errors.New("book not found")
 	ErrNoStock       = errors.New("no copies available for loan")
@@ -19,58 +17,51 @@ var (
 )
 
 // Store is the interface that repository implementations must satisfy.
-// Using an interface allows handlers to be tested with a fake/mock store.
+// Method names describe the operation, not the implementation mechanism (LSP).
 type Store interface {
 	GetBook(title string) (models.BookDetail, error)
-	BorrowBook(name, title string) (models.LoanDetail, error)
-	ExtendLoan(name, title string) (models.LoanDetail, error)
-	ReturnBook(name, title string) error
+	CreateLoan(loan models.LoanDetail) error
+	UpdateLoanExpiry(name, title string, days int) (models.LoanDetail, error)
+	DeleteLoan(name, title string) error
+	IncrementStock(title string) error
 }
 
 // LibraryStore is the in-memory implementation of Store.
-// All fields are unexported; callers interact exclusively through the Store interface.
 type LibraryStore struct {
-	mu     sync.RWMutex
-	books  map[string]*models.BookDetail
-	loans  map[string]models.LoanDetail // keyed by loanKey(name, title)
-	logger *slog.Logger
+	mu    sync.RWMutex
+	books map[string]*models.BookDetail
+	loans map[string]models.LoanDetail // keyed by loanKey(name, title)
 }
 
 // loanKey produces a composite map key for a (borrower, book) pair.
-// A null-byte separator prevents collisions where concatenated strings would be equal
-// (e.g. name="ab", title="cd" vs name="a", title="bcd").
+// A null-byte separator prevents collisions between names/titles that share a prefix.
 func loanKey(name, title string) string {
 	return name + "\x00" + title
 }
 
-// NewLibraryStore initialises the store and seeds it with sample books.
-func NewLibraryStore(logger *slog.Logger) *LibraryStore {
-	s := &LibraryStore{
-		books:  make(map[string]*models.BookDetail),
-		loans:  make(map[string]models.LoanDetail),
-		logger: logger,
+// NewLibraryStore initialises an empty store. Seed data is the caller's responsibility.
+func NewLibraryStore() *LibraryStore {
+	return &LibraryStore{
+		books: make(map[string]*models.BookDetail),
+		loans: make(map[string]models.LoanDetail),
 	}
+}
 
-	s.books["The Go Programming Language"] = &models.BookDetail{
-		Title:           "The Go Programming Language",
-		AvailableCopies: 3,
-	}
-	s.books["Clean Code"] = &models.BookDetail{
-		Title:           "Clean Code",
-		AvailableCopies: 1,
-	}
-
-	return s
+// AddBook inserts or replaces a book in the store.
+// This is intentionally not part of Store — only used at startup to seed data.
+func (s *LibraryStore) AddBook(book models.BookDetail) {
+	s.mu.Lock()
+	s.books[book.Title] = &book
+	s.mu.Unlock()
 }
 
 // GetBook returns a snapshot of the book with the given title.
-// The lock is released before returning so it is never held during response writes.
 func (s *LibraryStore) GetBook(title string) (models.BookDetail, error) {
 	s.mu.RLock()
 	b, ok := s.books[title]
 	var snap models.BookDetail
 	if ok {
-		snap = *b // copy value under lock to prevent data race after unlock
+		snap = *b // copy under lock to prevent data race after unlock
 	}
 	s.mu.RUnlock()
 
@@ -80,79 +71,68 @@ func (s *LibraryStore) GetBook(title string) (models.BookDetail, error) {
 	return snap, nil
 }
 
-// BorrowBook creates a 28-day loan for (name, title) if the book exists, has stock,
-// and the user does not already hold an active loan for the same book.
-// The lock is released before returning.
-func (s *LibraryStore) BorrowBook(name, title string) (models.LoanDetail, error) {
+// CreateLoan atomically verifies the book exists, has available stock, and the borrower
+// has no duplicate active loan, then decrements stock and stores the loan.
+// The caller is responsible for populating all LoanDetail fields including dates.
+func (s *LibraryStore) CreateLoan(loan models.LoanDetail) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	book, exists := s.books[title]
+	book, exists := s.books[loan.BookTitle]
 	if !exists {
-		s.mu.Unlock()
-		return models.LoanDetail{}, ErrBookNotFound
+		return ErrBookNotFound
 	}
 	if book.AvailableCopies <= 0 {
-		s.mu.Unlock()
-		return models.LoanDetail{}, ErrNoStock
+		return ErrNoStock
 	}
-	key := loanKey(name, title)
+	key := loanKey(loan.NameOfBorrower, loan.BookTitle)
 	if _, dup := s.loans[key]; dup {
-		s.mu.Unlock()
-		return models.LoanDetail{}, ErrDuplicateLoan
+		return ErrDuplicateLoan
 	}
 
-	// Atomic update: decrement stock and record the loan together.
 	book.AvailableCopies--
-	now := time.Now()
-	loan := models.LoanDetail{
-		NameOfBorrower: name,
-		BookTitle:      title,
-		LoanDate:       now,
-		ReturnDate:     now.AddDate(0, 0, 28),
-	}
 	s.loans[key] = loan
-
-	s.mu.Unlock()
-	return loan, nil
+	return nil
 }
 
-// ExtendLoan extends the return date of an active loan by 21 days.
-// The lock is released before returning.
-func (s *LibraryStore) ExtendLoan(name, title string) (models.LoanDetail, error) {
+// UpdateLoanExpiry atomically adds the given number of days to an active loan's return
+// date and returns the updated record. The service layer provides the number of days.
+func (s *LibraryStore) UpdateLoanExpiry(name, title string, days int) (models.LoanDetail, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	key := loanKey(name, title)
 	loan, exists := s.loans[key]
 	if !exists {
-		s.mu.Unlock()
 		return models.LoanDetail{}, ErrLoanNotFound
 	}
-	loan.ReturnDate = loan.ReturnDate.AddDate(0, 0, 21)
+	loan.ReturnDate = loan.ReturnDate.AddDate(0, 0, days)
 	s.loans[key] = loan
-
-	s.mu.Unlock()
 	return loan, nil
 }
 
-// ReturnBook removes the active loan for (name, title) and restores one copy to stock.
-// The lock is released before returning.
-func (s *LibraryStore) ReturnBook(name, title string) error {
+// DeleteLoan removes the active loan for (name, title).
+func (s *LibraryStore) DeleteLoan(name, title string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	key := loanKey(name, title)
 	if _, exists := s.loans[key]; !exists {
-		s.mu.Unlock()
 		return ErrLoanNotFound
 	}
 	delete(s.loans, key)
+	return nil
+}
 
-	if book, ok := s.books[title]; ok {
-		book.AvailableCopies++
-	} else {
-		// Invariant violation: loan existed but book record is missing.
-		s.logger.Error("book missing from store after loan deletion — stock not restored", "title", title)
+// IncrementStock adds one available copy back to the book's stock.
+func (s *LibraryStore) IncrementStock(title string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	book, ok := s.books[title]
+	if !ok {
+		return ErrBookNotFound
 	}
-
-	s.mu.Unlock()
+	book.AvailableCopies++
 	return nil
 }
