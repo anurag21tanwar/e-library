@@ -157,6 +157,13 @@ func (h *Handler) BorrowBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if this user already has an active loan for the same book
+	key := loanKey(req.Name, req.Title)
+	if _, duplicate := h.store.Loans[key]; duplicate {
+		writeError(w, "User already has an active loan for this book", http.StatusConflict)
+		return
+	}
+
 	// 5. Perform the Transaction
 	book.AvailableCopies--
 
@@ -167,7 +174,7 @@ func (h *Handler) BorrowBook(w http.ResponseWriter, r *http.Request) {
 		LoanDate:       now,
 		ReturnDate:     now.AddDate(0, 0, 28), // 4 weeks as per requirement
 	}
-	h.store.Loans[loanKey(req.Name, req.Title)] = loan
+	h.store.Loans[key] = loan
 
 	// 6. Respond with the loan details
 	writeJSON(w, http.StatusCreated, loan)
