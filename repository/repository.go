@@ -10,11 +10,12 @@ import (
 
 // Sentinel errors returned by store methods. The service layer maps these to domain errors.
 var (
-	ErrBookNotFound  = errors.New("book not found")
-	ErrDuplicateBook = errors.New("a book with that title already exists")
-	ErrNoStock       = errors.New("no copies available for loan")
-	ErrDuplicateLoan = errors.New("user already has an active loan for this book")
-	ErrLoanNotFound  = errors.New("no active loan found")
+	ErrBookNotFound        = errors.New("book not found")
+	ErrDuplicateBook       = errors.New("a book with that title already exists")
+	ErrNoStock             = errors.New("no copies available for loan")
+	ErrDuplicateLoan       = errors.New("user already has an active loan for this book")
+	ErrLoanNotFound        = errors.New("no active loan found")
+	ErrLoanAlreadyExtended = errors.New("loan has already been extended once")
 )
 
 // Store is the interface that repository implementations must satisfy.
@@ -104,7 +105,8 @@ func (s *LibraryStore) CreateLoan(loan models.LoanDetail) error {
 }
 
 // UpdateLoanExpiry atomically adds the given number of days to an active loan's return
-// date and returns the updated record. The service layer provides the number of days.
+// date and returns the updated record. Returns ErrLoanAlreadyExtended if the loan has
+// already been extended once. The service layer provides the number of days.
 func (s *LibraryStore) UpdateLoanExpiry(name, title string, days int) (models.LoanDetail, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,7 +116,11 @@ func (s *LibraryStore) UpdateLoanExpiry(name, title string, days int) (models.Lo
 	if !exists {
 		return models.LoanDetail{}, ErrLoanNotFound
 	}
+	if loan.Extended {
+		return models.LoanDetail{}, ErrLoanAlreadyExtended
+	}
 	loan.ReturnDate = loan.ReturnDate.AddDate(0, 0, days)
+	loan.Extended = true
 	s.loans[key] = loan
 	return loan, nil
 }

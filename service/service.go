@@ -78,13 +78,18 @@ func (s *libraryService) BorrowBook(name, title string) (models.LoanDetail, erro
 }
 
 // ExtendLoan extends the active loan's return date by extensionDays.
+// Returns ErrLoanAlreadyExtended if the loan has already been extended once.
 func (s *libraryService) ExtendLoan(name, title string) (models.LoanDetail, error) {
 	loan, err := s.store.UpdateLoanExpiry(name, title, extensionDays)
 	if err != nil {
-		if errors.Is(err, repository.ErrLoanNotFound) {
+		switch {
+		case errors.Is(err, repository.ErrLoanNotFound):
 			return models.LoanDetail{}, ErrLoanNotFound
+		case errors.Is(err, repository.ErrLoanAlreadyExtended):
+			return models.LoanDetail{}, ErrLoanAlreadyExtended
+		default:
+			return models.LoanDetail{}, err
 		}
-		return models.LoanDetail{}, err
 	}
 	return loan, nil
 }

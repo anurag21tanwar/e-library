@@ -15,4 +15,5 @@ type LoanDetail struct {
 	BookTitle      string    `json:"book_title"`
 	LoanDate       time.Time `json:"loan_date"`
 	ReturnDate     time.Time `json:"return_date"`
+	Extended       bool      `json:"extended"`
 }

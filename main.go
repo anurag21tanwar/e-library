@@ -22,7 +22,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	// Initialise store and seed starting inventory.
+	// Initialize store and seed starting inventory.
 	store := repository.NewLibraryStore()
 	for _, b := range []models.BookDetail{
 		{Title: "The Go Programming Language", AvailableCopies: 3},

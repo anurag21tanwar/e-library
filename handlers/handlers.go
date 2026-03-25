@@ -108,7 +108,14 @@ func (h *Handler) ExtendLoan(w http.ResponseWriter, r *http.Request) {
 
 	loan, err := h.loans.ExtendLoan(req.Name, req.Title)
 	if err != nil {
-		respond.Error(w, "No active loan found for this user and book", http.StatusNotFound)
+		switch {
+		case errors.Is(err, service.ErrLoanNotFound):
+			respond.Error(w, "No active loan found for this user and book", http.StatusNotFound)
+		case errors.Is(err, service.ErrLoanAlreadyExtended):
+			respond.Error(w, "Loan has already been extended once and cannot be extended again", http.StatusConflict)
+		default:
+			respond.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
 		return
 	}
 
