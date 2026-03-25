@@ -1,37 +1,130 @@
+// Package tests contain integration and unit tests for the e-Library HTTP handlers.
+// Files are split by handler (SRP): one file per endpoint group.
+//
+//	handlers_test.go  — shared infrastructure: fakes, setup, assertion helpers
+//	book_test.go      — GET /Book
+//	borrow_test.go    — POST /Borrow
+//	extend_test.go    — POST /Extend
+//	return_test.go    — POST /Return
 package tests
 
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"e-library/handlers"
 	"e-library/models"
 	"e-library/repository"
+	"e-library/respond"
+	"e-library/service"
 )
 
-// setup creates a fresh handler backed by a real in-memory store for each test.
-func setup() *handlers.Handler {
-	logger := slog.New(slog.NewTextHandler(nil, &slog.HandlerOptions{Level: slog.LevelError + 1}))
-	store := repository.NewLibraryStore(logger)
-	return handlers.NewHandler(store, logger)
+// =============================================================================
+// Fakes — DIP: handler tests never depend on the real service or repository.
+// Each fake implements only the interface its tests need (ISP).
+// =============================================================================
+
+// mockBookService implements service.BookService.
+type mockBookService struct {
+	getBookFn func(string) (models.BookDetail, error)
 }
 
-// borrowBook is a test helper that calls BorrowBook and returns the recorder.
-func borrowBook(h *handlers.Handler, name, title string) *httptest.ResponseRecorder {
-	body, _ := json.Marshal(map[string]string{"name": name, "title": title})
-	req := httptest.NewRequest(http.MethodPost, "/Borrow", bytes.NewBuffer(body))
+func (m *mockBookService) GetBook(title string) (models.BookDetail, error) {
+	if m.getBookFn != nil {
+		return m.getBookFn(title)
+	}
+	return models.BookDetail{}, nil
+}
+
+// mockLoanService implements service.LoanService.
+type mockLoanService struct {
+	borrowFn func(string, string) (models.LoanDetail, error)
+	extendFn func(string, string) (models.LoanDetail, error)
+	returnFn func(string, string) error
+}
+
+func (m *mockLoanService) BorrowBook(name, title string) (models.LoanDetail, error) {
+	if m.borrowFn != nil {
+		return m.borrowFn(name, title)
+	}
+	return models.LoanDetail{}, nil
+}
+
+func (m *mockLoanService) ExtendLoan(name, title string) (models.LoanDetail, error) {
+	if m.extendFn != nil {
+		return m.extendFn(name, title)
+	}
+	return models.LoanDetail{}, nil
+}
+
+func (m *mockLoanService) ReturnBook(name, title string) error {
+	if m.returnFn != nil {
+		return m.returnFn(name, title)
+	}
+	return nil
+}
+
+// =============================================================================
+// Setup functions
+// =============================================================================
+
+// newIntegrationHandler returns a Handler wired to a real in-memory store.
+// Use this when the test needs to verify end-to-end state changes.
+func newIntegrationHandler() *handlers.Handler {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := repository.NewLibraryStore()
+	store.AddBook(models.BookDetail{Title: "The Go Programming Language", AvailableCopies: 3})
+	store.AddBook(models.BookDetail{Title: "Clean Code", AvailableCopies: 1})
+	svc := service.New(store, logger)
+	return handlers.NewHandler(svc, svc, logger)
+}
+
+// handlerWithMocks returns a Handler wired to the given mock services.
+// Pass nil for either service when it is not exercised by the test.
+func handlerWithMocks(books service.BookService, loans service.LoanService) *handlers.Handler {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return handlers.NewHandler(books, loans, logger)
+}
+
+// =============================================================================
+// Request helpers
+// =============================================================================
+
+// postJSON sends a POST request to fn with the given body string.
+func postJSON(fn func(http.ResponseWriter, *http.Request), body string) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	fn(rr, req)
+	return rr
+}
+
+// newGetBookRequest builds a GET /Book?title=<title> request and recorder.
+// The title is query-escaped so titles with spaces are handled correctly.
+func newGetBookRequest(title string) (*http.Request, *httptest.ResponseRecorder) {
+	req := httptest.NewRequest(http.MethodGet, "/Book?title="+url.QueryEscape(title), nil)
+	return req, httptest.NewRecorder()
+}
+
+// borrowBook is an integration helper that sends a valid BorrowBook request.
+func borrowBook(h *handlers.Handler, name, title string) *httptest.ResponseRecorder {
+	b, _ := json.Marshal(map[string]string{"name": name, "title": title})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/Borrow", bytes.NewReader(b))
 	h.BorrowBook(rr, req)
 	return rr
 }
 
-// assertStatus fails the test if the response code does not match.
+// =============================================================================
+// Assertion helpers
+// =============================================================================
+
 func assertStatus(t *testing.T, rr *httptest.ResponseRecorder, want int) {
 	t.Helper()
 	if rr.Code != want {
@@ -39,315 +132,63 @@ func assertStatus(t *testing.T, rr *httptest.ResponseRecorder, want int) {
 	}
 }
 
-// assertContentType fails the test if the response is not application/json.
 func assertContentType(t *testing.T, rr *httptest.ResponseRecorder) {
 	t.Helper()
-	ct := rr.Header().Get("Content-Type")
-	if !strings.HasPrefix(ct, "application/json") {
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		t.Errorf("expected Content-Type application/json, got %q", ct)
 	}
 }
 
-// assertErrorBody decodes the JSON error envelope and checks the message.
 func assertErrorBody(t *testing.T, rr *httptest.ResponseRecorder, wantMsg string) {
 	t.Helper()
-	var resp handlers.ErrorResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+	var body respond.ErrorBody
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode error response: %v", err)
 	}
-	if resp.Error != wantMsg {
-		t.Errorf("expected error %q, got %q", wantMsg, resp.Error)
+	if body.Error != wantMsg {
+		t.Errorf("expected error %q, got %q", wantMsg, body.Error)
 	}
 }
 
-// --- GET /Book ---
-
-func TestGetBook_Success(t *testing.T) {
-	h := setup()
-	req := httptest.NewRequest(http.MethodGet, "/Book?title=Clean+Code", nil)
-	rr := httptest.NewRecorder()
-
-	h.GetBook(rr, req)
-
-	assertStatus(t, rr, http.StatusOK)
-	assertContentType(t, rr)
-
-	var book models.BookDetail
-	if err := json.NewDecoder(rr.Body).Decode(&book); err != nil {
-		t.Fatalf("failed to decode book response: %v", err)
+// decodeBody decodes the response body into T, failing the test on error.
+func decodeBody[T any](t *testing.T, rr *httptest.ResponseRecorder) T {
+	t.Helper()
+	var v T
+	if err := json.NewDecoder(rr.Body).Decode(&v); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
 	}
-	if book.Title != "Clean Code" {
-		t.Errorf("expected title %q, got %q", "Clean Code", book.Title)
-	}
-	if book.AvailableCopies != 1 {
-		t.Errorf("expected 1 available copy, got %d", book.AvailableCopies)
-	}
+	return v
 }
 
-func TestGetBook_MissingTitle(t *testing.T) {
-	h := setup()
-	req := httptest.NewRequest(http.MethodGet, "/Book", nil)
-	rr := httptest.NewRecorder()
+// =============================================================================
+// Shared table data — reused across POST handler validation tests (OCP).
+// Adding a new validation case means adding one row here, nowhere else.
+// =============================================================================
 
-	h.GetBook(rr, req)
-
-	assertStatus(t, rr, http.StatusBadRequest)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "Title query parameter is required")
-}
-
-func TestGetBook_NotFound(t *testing.T) {
-	h := setup()
-	req := httptest.NewRequest(http.MethodGet, "/Book?title=NonExistent", nil)
-	rr := httptest.NewRecorder()
-
-	h.GetBook(rr, req)
-
-	assertStatus(t, rr, http.StatusNotFound)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "Book not found")
-}
-
-// --- POST /Borrow ---
-
-func TestBorrowBook_Success(t *testing.T) {
-	h := setup()
-	rr := borrowBook(h, "Anurag", "Clean Code")
-
-	assertStatus(t, rr, http.StatusCreated)
-	assertContentType(t, rr)
-
-	var loan models.LoanDetail
-	if err := json.NewDecoder(rr.Body).Decode(&loan); err != nil {
-		t.Fatalf("failed to decode loan response: %v", err)
-	}
-	if loan.NameOfBorrower != "Anurag" {
-		t.Errorf("expected borrower %q, got %q", "Anurag", loan.NameOfBorrower)
-	}
-	if loan.BookTitle != "Clean Code" {
-		t.Errorf("expected book %q, got %q", "Clean Code", loan.BookTitle)
-	}
-	diff := time.Now().AddDate(0, 0, 28).Sub(loan.ReturnDate)
-	if diff < -time.Second || diff > time.Second {
-		t.Errorf("return date not ~28 days from now, got %v", loan.ReturnDate)
-	}
-
-	// Verify available copies decreased via GetBook (no direct store access).
-	req := httptest.NewRequest(http.MethodGet, "/Book?title=Clean+Code", nil)
-	gr := httptest.NewRecorder()
-	h.GetBook(gr, req)
-	var book models.BookDetail
-	_ = json.NewDecoder(gr.Body).Decode(&book)
-	if book.AvailableCopies != 0 {
-		t.Errorf("expected 0 available copies after borrow, got %d", book.AvailableCopies)
-	}
-}
-
-func TestBorrowBook_InvalidJSON(t *testing.T) {
-	h := setup()
-	req := httptest.NewRequest(http.MethodPost, "/Borrow", strings.NewReader("invalid-json"))
-	rr := httptest.NewRecorder()
-
-	h.BorrowBook(rr, req)
-
-	assertStatus(t, rr, http.StatusBadRequest)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "Invalid JSON payload")
-}
-
-func TestBorrowBook_MissingFields(t *testing.T) {
-	h := setup()
-	body, _ := json.Marshal(map[string]string{"name": "", "title": "Clean Code"})
-	req := httptest.NewRequest(http.MethodPost, "/Borrow", bytes.NewBuffer(body))
-	rr := httptest.NewRecorder()
-
-	h.BorrowBook(rr, req)
-
-	assertStatus(t, rr, http.StatusBadRequest)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "Name and Title are required")
-}
-
-func TestBorrowBook_OutOfStock(t *testing.T) {
-	h := setup()
-	// Exhaust the single copy of "Clean Code" with a legitimate borrow.
-	borrowBook(h, "FirstUser", "Clean Code")
-
-	// A second user attempting to borrow should get a 409.
-	rr := borrowBook(h, "SecondUser", "Clean Code")
-
-	assertStatus(t, rr, http.StatusConflict)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "No copies available for loan")
-}
-
-func TestBorrowBook_BookNotFound(t *testing.T) {
-	h := setup()
-	rr := borrowBook(h, "Anurag", "Unknown Book")
-
-	assertStatus(t, rr, http.StatusNotFound)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "Book does not exist")
-}
-
-func TestBorrowBook_DuplicateLoan(t *testing.T) {
-	h := setup()
-	// First borrow succeeds.
-	borrowBook(h, "Anurag", "The Go Programming Language")
-
-	// Same user borrowing the same book again should get a 409.
-	rr := borrowBook(h, "Anurag", "The Go Programming Language")
-
-	assertStatus(t, rr, http.StatusConflict)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "User already has an active loan for this book")
-}
-
-// --- POST /Extend ---
-
-func TestExtendLoan_Success(t *testing.T) {
-	h := setup()
-	// Create a loan first so there is something to extend.
-	br := borrowBook(h, "Anurag", "Clean Code")
-	var original models.LoanDetail
-	_ = json.NewDecoder(br.Body).Decode(&original)
-
-	body, _ := json.Marshal(map[string]string{"name": "Anurag", "title": "Clean Code"})
-	req := httptest.NewRequest(http.MethodPost, "/Extend", bytes.NewBuffer(body))
-	rr := httptest.NewRecorder()
-
-	h.ExtendLoan(rr, req)
-
-	assertStatus(t, rr, http.StatusOK)
-	assertContentType(t, rr)
-
-	var extended models.LoanDetail
-	if err := json.NewDecoder(rr.Body).Decode(&extended); err != nil {
-		t.Fatalf("failed to decode extend response: %v", err)
-	}
-	expected := original.ReturnDate.AddDate(0, 0, 21)
-	diff := expected.Sub(extended.ReturnDate)
-	if diff < -time.Second || diff > time.Second {
-		t.Errorf("expected return date extended by 21 days, got %v", extended.ReturnDate)
-	}
-}
-
-func TestExtendLoan_InvalidJSON(t *testing.T) {
-	h := setup()
-	req := httptest.NewRequest(http.MethodPost, "/Extend", strings.NewReader("invalid-json"))
-	rr := httptest.NewRecorder()
-
-	h.ExtendLoan(rr, req)
-
-	assertStatus(t, rr, http.StatusBadRequest)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "Invalid JSON payload")
-}
-
-func TestExtendLoan_MissingFields(t *testing.T) {
-	h := setup()
-	body, _ := json.Marshal(map[string]string{"name": "", "title": "Clean Code"})
-	req := httptest.NewRequest(http.MethodPost, "/Extend", bytes.NewBuffer(body))
-	rr := httptest.NewRecorder()
-
-	h.ExtendLoan(rr, req)
-
-	assertStatus(t, rr, http.StatusBadRequest)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "Name and Title are required")
-}
-
-func TestExtendLoan_NotFound(t *testing.T) {
-	h := setup()
-	body, _ := json.Marshal(map[string]string{"name": "Stranger", "title": "Clean Code"})
-	req := httptest.NewRequest(http.MethodPost, "/Extend", bytes.NewBuffer(body))
-	rr := httptest.NewRecorder()
-
-	h.ExtendLoan(rr, req)
-
-	assertStatus(t, rr, http.StatusNotFound)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "No active loan found for this user and book")
-}
-
-// --- POST /Return ---
-
-func TestReturnBook_Success(t *testing.T) {
-	h := setup()
-	// Create a loan so there is something to return.
-	borrowBook(h, "Anurag", "Clean Code")
-
-	body, _ := json.Marshal(map[string]string{"name": "Anurag", "title": "Clean Code"})
-	req := httptest.NewRequest(http.MethodPost, "/Return", bytes.NewBuffer(body))
-	rr := httptest.NewRecorder()
-
-	h.ReturnBook(rr, req)
-
-	assertStatus(t, rr, http.StatusOK)
-	assertContentType(t, rr)
-
-	var resp map[string]string
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode return response: %v", err)
-	}
-	if resp["message"] != "Book returned successfully" {
-		t.Errorf("unexpected message: %q", resp["message"])
-	}
-
-	// Verify available copies restored via GetBook.
-	req = httptest.NewRequest(http.MethodGet, "/Book?title=Clean+Code", nil)
-	gr := httptest.NewRecorder()
-	h.GetBook(gr, req)
-	var book models.BookDetail
-	_ = json.NewDecoder(gr.Body).Decode(&book)
-	if book.AvailableCopies != 1 {
-		t.Errorf("expected 1 available copy after return, got %d", book.AvailableCopies)
-	}
-
-	// Verify loan is gone by attempting to extend it — should return 404.
-	body, _ = json.Marshal(map[string]string{"name": "Anurag", "title": "Clean Code"})
-	req = httptest.NewRequest(http.MethodPost, "/Extend", bytes.NewBuffer(body))
-	er := httptest.NewRecorder()
-	h.ExtendLoan(er, req)
-	if er.Code != http.StatusNotFound {
-		t.Errorf("expected loan to be removed after return, got status %d", er.Code)
-	}
-}
-
-func TestReturnBook_MissingFields(t *testing.T) {
-	h := setup()
-	body, _ := json.Marshal(map[string]string{"name": "Anurag", "title": ""})
-	req := httptest.NewRequest(http.MethodPost, "/Return", bytes.NewBuffer(body))
-	rr := httptest.NewRecorder()
-
-	h.ReturnBook(rr, req)
-
-	assertStatus(t, rr, http.StatusBadRequest)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "Name and Title are required")
-}
-
-func TestReturnBook_InvalidJSON(t *testing.T) {
-	h := setup()
-	req := httptest.NewRequest(http.MethodPost, "/Return", strings.NewReader("invalid-json"))
-	rr := httptest.NewRecorder()
-
-	h.ReturnBook(rr, req)
-
-	assertStatus(t, rr, http.StatusBadRequest)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "Invalid JSON payload")
-}
-
-func TestReturnBook_NotFound(t *testing.T) {
-	h := setup()
-	body, _ := json.Marshal(map[string]string{"name": "Stranger", "title": "Clean Code"})
-	req := httptest.NewRequest(http.MethodPost, "/Return", bytes.NewBuffer(body))
-	rr := httptest.NewRecorder()
-
-	h.ReturnBook(rr, req)
-
-	assertStatus(t, rr, http.StatusNotFound)
-	assertContentType(t, rr)
-	assertErrorBody(t, rr, "Active loan record not found")
+// nameAndTitleValidationCases covers the two validation rules common to all
+// POST endpoints that accept {"name", "title"} bodies.
+var nameAndTitleValidationCases = []struct {
+	name       string
+	body       string
+	wantStatus int
+	wantError  string
+}{
+	{
+		name:       "invalid JSON",
+		body:       "not-json",
+		wantStatus: http.StatusBadRequest,
+		wantError:  "Invalid JSON payload",
+	},
+	{
+		name:       "empty name",
+		body:       `{"name":"","title":"Clean Code"}`,
+		wantStatus: http.StatusBadRequest,
+		wantError:  "Name and Title are required",
+	},
+	{
+		name:       "empty title",
+		body:       `{"name":"Anurag","title":""}`,
+		wantStatus: http.StatusBadRequest,
+		wantError:  "Name and Title are required",
+	},
 }
