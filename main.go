@@ -106,6 +106,10 @@ func (h *Handler) GetBook(w http.ResponseWriter, r *http.Request) {
 	// 2. Read from the store with a Read-Lock (allows multiple simultaneous readers)
 	h.store.mu.RLock()
 	book, exists := h.store.Books[title]
+	var bookCopy BookDetail
+	if exists {
+		bookCopy = *book // copy value while holding the lock to avoid a data race
+	}
 	h.store.mu.RUnlock()
 
 	// 3. Handle the "Not Found" case
@@ -115,7 +119,7 @@ func (h *Handler) GetBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Return JSON response
-	writeJSON(w, http.StatusOK, book)
+	writeJSON(w, http.StatusOK, bookCopy)
 }
 
 // BorrowBook handles POST /Borrow
