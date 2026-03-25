@@ -56,9 +56,36 @@ func NewLibraryStore() *LibraryStore {
 	return store
 }
 
+// ErrorResponse is the standard JSON error envelope returned by all endpoints
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+
 // Handler will hold our store dependency for the API endpoints
 type Handler struct {
 	store *LibraryStore
+}
+
+// writeError writes a JSON-encoded ErrorResponse with the given status code
+func writeError(w http.ResponseWriter, message string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(ErrorResponse{Error: message})
+}
+
+// writeJSON encodes v into a buffer first; only if that succeeds does it write
+// the status code and body. This prevents sending a 200 header followed by a
+// broken body when encoding fails.
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	buf, err := json.Marshal(v)
+	if err != nil {
+		log.Printf("failed to encode response: %v", err)
+		writeError(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_, _ = w.Write(buf)
 }
 
 // GetBook handles GET /Book?title=XYZ
@@ -66,7 +93,7 @@ func (h *Handler) GetBook(w http.ResponseWriter, r *http.Request) {
 	// 1. Extract the query parameter
 	title := r.URL.Query().Get("title")
 	if title == "" {
-		http.Error(w, "Title query parameter is required", http.StatusBadRequest)
+		writeError(w, "Title query parameter is required", http.StatusBadRequest)
 		return
 	}
 
@@ -77,15 +104,12 @@ func (h *Handler) GetBook(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Handle the "Not Found" case
 	if !exists {
-		http.Error(w, "Book not found", http.StatusNotFound)
+		writeError(w, "Book not found", http.StatusNotFound)
 		return
 	}
 
 	// 4. Return JSON response
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(book); err != nil {
-		log.Printf("failed to encode response: %v", err)
-	}
+	writeJSON(w, http.StatusOK, book)
 }
 
 // BorrowBook handles POST /Borrow
@@ -98,13 +122,13 @@ func (h *Handler) BorrowBook(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Decode JSON body
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		writeError(w, "Invalid JSON payload", http.StatusBadRequest)
 		return
 	}
 
 	// 3. Validation
 	if req.Name == "" || req.Title == "" {
-		http.Error(w, "Name and Title are required", http.StatusBadRequest)
+		writeError(w, "Name and Title are required", http.StatusBadRequest)
 		return
 	}
 
@@ -114,12 +138,12 @@ func (h *Handler) BorrowBook(w http.ResponseWriter, r *http.Request) {
 
 	book, exists := h.store.Books[req.Title]
 	if !exists {
-		http.Error(w, "Book does not exist", http.StatusNotFound)
+		writeError(w, "Book does not exist", http.StatusNotFound)
 		return
 	}
 
 	if book.AvailableCopies <= 0 {
-		http.Error(w, "No copies available for loan", http.StatusConflict)
+		writeError(w, "No copies available for loan", http.StatusConflict)
 		return
 	}
 
@@ -135,11 +159,7 @@ func (h *Handler) BorrowBook(w http.ResponseWriter, r *http.Request) {
 	h.store.Loans = append(h.store.Loans, loan)
 
 	// 6. Respond with the loan details
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(loan); err != nil {
-		log.Printf("failed to encode response: %v", err)
-	}
+	writeJSON(w, http.StatusCreated, loan)
 }
 
 // ExtendLoan handles POST /Extend
@@ -149,7 +169,7 @@ func (h *Handler) ExtendLoan(w http.ResponseWriter, r *http.Request) {
 		Title string `json:"title"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid input", http.StatusBadRequest)
+		writeError(w, "Invalid JSON payload", http.StatusBadRequest)
 		return
 	}
 
@@ -161,16 +181,12 @@ func (h *Handler) ExtendLoan(w http.ResponseWriter, r *http.Request) {
 		if loan.NameOfBorrower == req.Name && loan.BookTitle == req.Title {
 			// Extend by 3 weeks (21 days) from the current return date
 			h.store.Loans[i].ReturnDate = loan.ReturnDate.AddDate(0, 0, 21)
-
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(h.store.Loans[i]); err != nil {
-				log.Printf("failed to encode response: %v", err)
-			}
+			writeJSON(w, http.StatusOK, h.store.Loans[i])
 			return
 		}
 	}
 
-	http.Error(w, "No active loan found for this user and book", http.StatusNotFound)
+	writeError(w, "No active loan found for this user and book", http.StatusNotFound)
 }
 
 // ReturnBook handles POST /Return
@@ -180,7 +196,7 @@ func (h *Handler) ReturnBook(w http.ResponseWriter, r *http.Request) {
 		Title string `json:"title"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request payload: "+err.Error(), http.StatusBadRequest)
+		writeError(w, "Invalid JSON payload", http.StatusBadRequest)
 		return
 	}
 
@@ -197,13 +213,12 @@ func (h *Handler) ReturnBook(w http.ResponseWriter, r *http.Request) {
 				book.AvailableCopies++
 			}
 
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprint(w, "Book returned successfully")
+			writeJSON(w, http.StatusOK, map[string]string{"message": "Book returned successfully"})
 			return
 		}
 	}
 
-	http.Error(w, "Active loan record not found", http.StatusNotFound)
+	writeError(w, "Active loan record not found", http.StatusNotFound)
 }
 
 func main() {
