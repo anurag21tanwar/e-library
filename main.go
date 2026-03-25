@@ -24,8 +24,14 @@ func main() {
 
 	// Initialise store and seed starting inventory.
 	store := repository.NewLibraryStore()
-	store.AddBook(models.BookDetail{Title: "The Go Programming Language", AvailableCopies: 3})
-	store.AddBook(models.BookDetail{Title: "Clean Code", AvailableCopies: 1})
+	for _, b := range []models.BookDetail{
+		{Title: "The Go Programming Language", AvailableCopies: 3},
+		{Title: "Clean Code", AvailableCopies: 1},
+	} {
+		if err := store.AddBook(b); err != nil {
+			logger.Error("failed to seed book", "title", b.Title, "error", err)
+		}
+	}
 
 	// *service.libraryService satisfies both BookService and LoanService.
 	svc := service.New(store, logger)

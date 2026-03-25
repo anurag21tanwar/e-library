@@ -11,6 +11,7 @@ package tests
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -75,13 +76,21 @@ func (m *mockLoanService) ReturnBook(name, title string) error {
 // Setup functions
 // =============================================================================
 
+// mustAddBook seeds a book into the store, panicking if the title is a duplicate.
+// A panic here means the test fixture is broken, not that production code is wrong.
+func mustAddBook(store *repository.LibraryStore, book models.BookDetail) {
+	if err := store.AddBook(book); err != nil {
+		panic(fmt.Sprintf("test setup: failed to add book %q: %v", book.Title, err))
+	}
+}
+
 // newIntegrationHandler returns a Handler wired to a real in-memory store.
 // Use this when the test needs to verify end-to-end state changes.
 func newIntegrationHandler() *handlers.Handler {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	store := repository.NewLibraryStore()
-	store.AddBook(models.BookDetail{Title: "The Go Programming Language", AvailableCopies: 3})
-	store.AddBook(models.BookDetail{Title: "Clean Code", AvailableCopies: 1})
+	mustAddBook(store, models.BookDetail{Title: "The Go Programming Language", AvailableCopies: 3})
+	mustAddBook(store, models.BookDetail{Title: "Clean Code", AvailableCopies: 1})
 	svc := service.New(store, logger)
 	return handlers.NewHandler(svc, svc, logger)
 }

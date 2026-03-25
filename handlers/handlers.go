@@ -9,6 +9,7 @@ import (
 
 	"e-library/respond"
 	"e-library/service"
+	"e-library/validator"
 )
 
 const maxBodyBytes = 1 << 20 // 1 MB — guards against oversized request bodies
@@ -27,9 +28,7 @@ func NewHandler(books service.BookService, loans service.LoanService, logger *sl
 	return &Handler{books: books, loans: loans, logger: logger}
 }
 
-// Register registers all handler routes on mux.
-// Implementing Register satisfies the routes.Registrar interface, allowing NewRouter
-// to accept any number of handler groups without modification (OCP).
+// Register registers all handler routes on mux, satisfying routes.Registrar (OCP).
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /Book", h.GetBook)
 	mux.HandleFunc("POST /Borrow", h.BorrowBook)
@@ -37,8 +36,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /Return", h.ReturnBook)
 }
 
-// decodeRequest applies a body size limit, then decodes JSON into v.
-// It writes a 400 response and returns false on any failure.
+// decodeRequest applies a body size limit and decodes JSON into v.
+// Returns false and writes a 400 response on any failure.
 func decodeRequest(w http.ResponseWriter, r *http.Request, v any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
@@ -52,13 +51,13 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, v any) bool {
 
 // GetBook handles GET /Book?title=<title>
 func (h *Handler) GetBook(w http.ResponseWriter, r *http.Request) {
-	title := r.URL.Query().Get("title")
-	if title == "" {
-		respond.Error(w, "Title query parameter is required", http.StatusBadRequest)
+	query := validator.GetBookQuery{Title: r.URL.Query().Get("title")}
+	if err := query.Validate(); err != nil {
+		respond.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	book, err := h.books.GetBook(title)
+	book, err := h.books.GetBook(query.Title)
 	if err != nil {
 		respond.Error(w, "Book not found", http.StatusNotFound)
 		return
@@ -69,15 +68,12 @@ func (h *Handler) GetBook(w http.ResponseWriter, r *http.Request) {
 
 // BorrowBook handles POST /Borrow
 func (h *Handler) BorrowBook(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name  string `json:"name"`
-		Title string `json:"title"`
-	}
+	var req validator.BorrowRequest
 	if !decodeRequest(w, r, &req) {
 		return
 	}
-	if req.Name == "" || req.Title == "" {
-		respond.Error(w, "Name and Title are required", http.StatusBadRequest)
+	if err := req.Validate(); err != nil {
+		respond.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -101,15 +97,12 @@ func (h *Handler) BorrowBook(w http.ResponseWriter, r *http.Request) {
 
 // ExtendLoan handles POST /Extend
 func (h *Handler) ExtendLoan(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name  string `json:"name"`
-		Title string `json:"title"`
-	}
+	var req validator.ExtendRequest
 	if !decodeRequest(w, r, &req) {
 		return
 	}
-	if req.Name == "" || req.Title == "" {
-		respond.Error(w, "Name and Title are required", http.StatusBadRequest)
+	if err := req.Validate(); err != nil {
+		respond.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -124,15 +117,12 @@ func (h *Handler) ExtendLoan(w http.ResponseWriter, r *http.Request) {
 
 // ReturnBook handles POST /Return
 func (h *Handler) ReturnBook(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name  string `json:"name"`
-		Title string `json:"title"`
-	}
+	var req validator.ReturnRequest
 	if !decodeRequest(w, r, &req) {
 		return
 	}
-	if req.Name == "" || req.Title == "" {
-		respond.Error(w, "Name and Title are required", http.StatusBadRequest)
+	if err := req.Validate(); err != nil {
+		respond.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

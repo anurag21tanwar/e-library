@@ -11,6 +11,7 @@ import (
 // Sentinel errors returned by store methods. The service layer maps these to domain errors.
 var (
 	ErrBookNotFound  = errors.New("book not found")
+	ErrDuplicateBook = errors.New("a book with that title already exists")
 	ErrNoStock       = errors.New("no copies available for loan")
 	ErrDuplicateLoan = errors.New("user already has an active loan for this book")
 	ErrLoanNotFound  = errors.New("no active loan found")
@@ -47,12 +48,19 @@ func NewLibraryStore() *LibraryStore {
 	}
 }
 
-// AddBook inserts or replaces a book in the store.
+// AddBook inserts a book into the store. Returns ErrDuplicateBook if a book
+// with the same title already exists. Title uniqueness is enforced here because
+// the title is the primary key used throughout the system.
 // This is intentionally not part of Store — only used at startup to seed data.
-func (s *LibraryStore) AddBook(book models.BookDetail) {
+func (s *LibraryStore) AddBook(book models.BookDetail) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.books[book.Title]; exists {
+		return ErrDuplicateBook
+	}
 	s.books[book.Title] = &book
-	s.mu.Unlock()
+	return nil
 }
 
 // GetBook returns a snapshot of the book with the given title.
