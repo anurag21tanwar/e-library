@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"e-library/repository"
 )
@@ -29,9 +30,35 @@ func NewHandler(s repository.Store, logger *slog.Logger) *Handler {
 	return &Handler{store: s, logger: logger}
 }
 
+// responseWriter wraps http.ResponseWriter to capture the status code written by handlers.
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+// loggingMiddleware logs method, path, status code, and latency for every request.
+func (h *Handler) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		h.logger.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rw.status,
+			"latency_ms", time.Since(start).Milliseconds(),
+		)
+	})
+}
+
 // NewRouter registers all routes on a new ServeMux and returns it.
 // Keeping routing here (rather than in the main) makes the handler package self-contained.
-func NewRouter(h *Handler) *http.ServeMux {
+func NewRouter(h *Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
@@ -42,7 +69,7 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /Extend", h.ExtendLoan)
 	mux.HandleFunc("POST /Return", h.ReturnBook)
 
-	return mux
+	return h.loggingMiddleware(mux)
 }
 
 // --- Response helpers ---
