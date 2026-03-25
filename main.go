@@ -33,14 +33,20 @@ type LoanDetail struct {
 type LibraryStore struct {
 	mu    sync.RWMutex
 	Books map[string]*BookDetail
-	Loans []LoanDetail
+	Loans map[string]LoanDetail // keyed by loanKey(name, title) for O(1) lookup
+}
+
+// loanKey returns a unique map key for a (borrower, book) pair.
+// A null byte separator prevents collisions between names/titles that contain colons.
+func loanKey(name, title string) string {
+	return name + "\x00" + title
 }
 
 // NewLibraryStore initializes the store with some test data
 func NewLibraryStore() *LibraryStore {
 	store := &LibraryStore{
 		Books: make(map[string]*BookDetail),
-		Loans: []LoanDetail{},
+		Loans: make(map[string]LoanDetail),
 	}
 
 	// Seed data as per requirement 2
@@ -150,13 +156,14 @@ func (h *Handler) BorrowBook(w http.ResponseWriter, r *http.Request) {
 	// 5. Perform the Transaction
 	book.AvailableCopies--
 
+	now := time.Now()
 	loan := LoanDetail{
 		NameOfBorrower: req.Name,
 		BookTitle:      req.Title,
-		LoanDate:       time.Now(),
-		ReturnDate:     time.Now().AddDate(0, 0, 28), // 4 weeks as per requirement
+		LoanDate:       now,
+		ReturnDate:     now.AddDate(0, 0, 28), // 4 weeks as per requirement
 	}
-	h.store.Loans = append(h.store.Loans, loan)
+	h.store.Loans[loanKey(req.Name, req.Title)] = loan
 
 	// 6. Respond with the loan details
 	writeJSON(w, http.StatusCreated, loan)
@@ -176,17 +183,19 @@ func (h *Handler) ExtendLoan(w http.ResponseWriter, r *http.Request) {
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
 
-	// Search for the active loan
-	for i, loan := range h.store.Loans {
-		if loan.NameOfBorrower == req.Name && loan.BookTitle == req.Title {
-			// Extend by 3 weeks (21 days) from the current return date
-			h.store.Loans[i].ReturnDate = loan.ReturnDate.AddDate(0, 0, 21)
-			writeJSON(w, http.StatusOK, h.store.Loans[i])
-			return
-		}
+	// O(1) lookup for the active loan
+	key := loanKey(req.Name, req.Title)
+	loan, exists := h.store.Loans[key]
+	if !exists {
+		writeError(w, "No active loan found for this user and book", http.StatusNotFound)
+		return
 	}
 
-	writeError(w, "No active loan found for this user and book", http.StatusNotFound)
+	// Extend by 3 weeks (21 days) from the current return date
+	loan.ReturnDate = loan.ReturnDate.AddDate(0, 0, 21)
+	h.store.Loans[key] = loan
+
+	writeJSON(w, http.StatusOK, loan)
 }
 
 // ReturnBook handles POST /Return
@@ -203,22 +212,22 @@ func (h *Handler) ReturnBook(w http.ResponseWriter, r *http.Request) {
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
 
-	for i, loan := range h.store.Loans {
-		if loan.NameOfBorrower == req.Name && loan.BookTitle == req.Title {
-			// 1. Remove loan from slice
-			h.store.Loans = append(h.store.Loans[:i], h.store.Loans[i+1:]...)
-
-			// 2. Increment the available copies back in the book map
-			if book, ok := h.store.Books[req.Title]; ok {
-				book.AvailableCopies++
-			}
-
-			writeJSON(w, http.StatusOK, map[string]string{"message": "Book returned successfully"})
-			return
-		}
+	// O(1) lookup and removal
+	key := loanKey(req.Name, req.Title)
+	if _, exists := h.store.Loans[key]; !exists {
+		writeError(w, "Active loan record not found", http.StatusNotFound)
+		return
 	}
 
-	writeError(w, "Active loan record not found", http.StatusNotFound)
+	// 1. Remove loan from the map
+	delete(h.store.Loans, key)
+
+	// 2. Increment the available copies back in the book map
+	if book, ok := h.store.Books[req.Title]; ok {
+		book.AvailableCopies++
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Book returned successfully"})
 }
 
 func main() {

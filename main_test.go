@@ -110,10 +110,10 @@ func TestBorrowBook_OutOfStock(t *testing.T) {
 func TestExtendLoan_Success(t *testing.T) {
 	h := setup()
 	// Manually inject a loan to extend
-	h.store.Loans = append(h.store.Loans, LoanDetail{
+	h.store.Loans[loanKey("Anurag", "Clean Code")] = LoanDetail{
 		NameOfBorrower: "Anurag",
 		BookTitle:      "Clean Code",
-	})
+	}
 
 	body, _ := json.Marshal(map[string]string{"name": "Anurag", "title": "Clean Code"})
 	req := httptest.NewRequest("POST", "/Extend", bytes.NewBuffer(body))
@@ -142,8 +142,8 @@ func TestExtendLoan_NotFound(t *testing.T) {
 // 4. Tests for POST /Return
 func TestReturnBook_Success(t *testing.T) {
 	h := setup()
-	// Borrow first
-	h.store.Loans = append(h.store.Loans, LoanDetail{NameOfBorrower: "Anurag", BookTitle: "Clean Code"})
+	// Inject a loan directly into the map
+	h.store.Loans[loanKey("Anurag", "Clean Code")] = LoanDetail{NameOfBorrower: "Anurag", BookTitle: "Clean Code"}
 
 	body, _ := json.Marshal(map[string]string{"name": "Anurag", "title": "Clean Code"})
 	req := httptest.NewRequest("POST", "/Return", bytes.NewBuffer(body))
